@@ -69,6 +69,8 @@ pub struct ParsedMessages {
     pub openclaw_count: i32,
     pub pi_count: i32,
     pub kimi_count: i32,
+    pub roocode_count: i32,
+    pub kilocode_count: i32,
     pub processing_time_ms: u32,
 }
 
@@ -187,17 +189,9 @@ use sessions::UnifiedMessage;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const DEFAULT_SOURCES: [&str; 10] = [
-    "opencode",
-    "claude",
-    "codex",
-    "gemini",
-    "cursor",
-    "amp",
-    "droid",
-    "openclaw",
-    "pi",
-    "kimi",
+const DEFAULT_SOURCES: [&str; 12] = [
+    "opencode", "claude", "codex", "gemini", "cursor", "amp", "droid", "openclaw", "pi", "kimi",
+    "roocode", "kilocode",
 ];
 
 fn default_sources(include_cursor: bool) -> Vec<String> {
@@ -396,7 +390,8 @@ pub fn parse_local_sources(options: LocalParseOptions) -> napi::Result<ParsedMes
                     if let Some(mtime) = sessions::opencode::get_json_dir_mtime(json_dir) {
                         sessions::opencode::save_opencode_migration_cache(
                             &sessions::opencode::OpenCodeMigrationCache {
-                                migration_complete: !scan_result.opencode_files.is_empty() && json_survived == 0,
+                                migration_complete: !scan_result.opencode_files.is_empty()
+                                    && json_survived == 0,
                                 json_file_count: scan_result.opencode_files.len() as u64,
                                 json_dir_mtime_secs: mtime,
                                 checked_at_secs: sessions::opencode::now_secs(),
@@ -537,6 +532,34 @@ pub fn parse_local_sources(options: LocalParseOptions) -> napi::Result<ParsedMes
     let kimi_count = kimi_msgs.len() as i32;
     messages.extend(kimi_msgs);
 
+    // Parse Roo Code task ui_messages.json files in parallel
+    let roocode_msgs: Vec<ParsedMessage> = scan_result
+        .roocode_files
+        .par_iter()
+        .flat_map(|path| {
+            sessions::roocode::parse_roocode_file(path)
+                .into_iter()
+                .map(|msg| unified_to_parsed(&msg))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let roocode_count = roocode_msgs.len() as i32;
+    messages.extend(roocode_msgs);
+
+    // Parse KiloCode task ui_messages.json files in parallel
+    let kilocode_msgs: Vec<ParsedMessage> = scan_result
+        .kilocode_files
+        .par_iter()
+        .flat_map(|path| {
+            sessions::kilocode::parse_kilocode_file(path)
+                .into_iter()
+                .map(|msg| unified_to_parsed(&msg))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let kilocode_count = kilocode_msgs.len() as i32;
+    messages.extend(kilocode_msgs);
+
     // Apply date filters
     let filtered = filter_parsed_messages(messages, &options);
 
@@ -551,6 +574,8 @@ pub fn parse_local_sources(options: LocalParseOptions) -> napi::Result<ParsedMes
         openclaw_count,
         pi_count,
         kimi_count,
+        roocode_count,
+        kilocode_count,
         processing_time_ms: start.elapsed().as_millis() as u32,
     })
 }
@@ -796,7 +821,9 @@ pub struct FinalizeMonthlyOptions {
 
 /// Finalize monthly report
 #[napi]
-pub async fn finalize_monthly_report(options: FinalizeMonthlyOptions) -> napi::Result<MonthlyReport> {
+pub async fn finalize_monthly_report(
+    options: FinalizeMonthlyOptions,
+) -> napi::Result<MonthlyReport> {
     let start = Instant::now();
 
     let home_dir = get_home_dir(&options.home_dir)?;
@@ -1023,7 +1050,9 @@ pub struct ReportAndGraph {
 /// Finalize both report and graph in a single call with shared pricing
 /// This ensures consistent costs between report and graph data
 #[napi]
-pub async fn finalize_report_and_graph(options: FinalizeReportOptions) -> napi::Result<ReportAndGraph> {
+pub async fn finalize_report_and_graph(
+    options: FinalizeReportOptions,
+) -> napi::Result<ReportAndGraph> {
     let start = Instant::now();
 
     let home_dir = get_home_dir(&options.home_dir)?;
@@ -1159,7 +1188,8 @@ pub async fn finalize_report_and_graph(options: FinalizeReportOptions) -> napi::
 
     // --- Generate Graph ---
     let contributions = aggregator::aggregate_by_date(messages_for_graph);
-    let graph = aggregator::generate_graph_result(contributions, start.elapsed().as_millis() as u32);
+    let graph =
+        aggregator::generate_graph_result(contributions, start.elapsed().as_millis() as u32);
 
     Ok(ReportAndGraph { report, graph })
 }
@@ -1185,13 +1215,16 @@ pub struct PricingLookupResult {
 }
 
 #[napi]
-pub async fn lookup_pricing(model_id: String, provider: Option<String>) -> napi::Result<PricingLookupResult> {
+pub async fn lookup_pricing(
+    model_id: String,
+    provider: Option<String>,
+) -> napi::Result<PricingLookupResult> {
     let service = pricing::PricingService::get_or_init()
         .await
         .map_err(|e| napi::Error::from_reason(e))?;
 
     let force_source = provider.as_deref();
-    
+
     match service.lookup_with_source(&model_id, force_source) {
         Some(result) => Ok(PricingLookupResult {
             model_id,
@@ -1207,7 +1240,9 @@ pub async fn lookup_pricing(model_id: String, provider: Option<String>) -> napi:
         None => Err(napi::Error::from_reason(format!(
             "Model not found: {}{}",
             model_id,
-            force_source.map(|s| format!(" (forced source: {})", s)).unwrap_or_default()
+            force_source
+                .map(|s| format!(" (forced source: {})", s))
+                .unwrap_or_default()
         ))),
     }
 }

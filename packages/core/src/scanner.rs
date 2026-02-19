@@ -19,6 +19,8 @@ pub enum SessionType {
     OpenClaw,
     Pi,
     Kimi,
+    RooCode,
+    KiloCode,
 }
 
 /// Result of scanning all session directories
@@ -37,6 +39,8 @@ pub struct ScanResult {
     pub openclaw_files: Vec<PathBuf>,
     pub pi_files: Vec<PathBuf>,
     pub kimi_files: Vec<PathBuf>,
+    pub roocode_files: Vec<PathBuf>,
+    pub kilocode_files: Vec<PathBuf>,
 }
 
 impl ScanResult {
@@ -52,6 +56,8 @@ impl ScanResult {
             + self.openclaw_files.len()
             + self.pi_files.len()
             + self.kimi_files.len()
+            + self.roocode_files.len()
+            + self.kilocode_files.len()
     }
 
     /// Get all files as a single vector
@@ -87,6 +93,12 @@ impl ScanResult {
         }
         for path in &self.kimi_files {
             result.push((SessionType::Kimi, path.clone()));
+        }
+        for path in &self.roocode_files {
+            result.push((SessionType::RooCode, path.clone()));
+        }
+        for path in &self.kilocode_files {
+            result.push((SessionType::KiloCode, path.clone()));
         }
 
         result
@@ -169,6 +181,7 @@ pub fn scan_directory(root: &str, pattern: &str) -> Vec<PathBuf> {
                 "*.settings.json" => file_name.ends_with(".settings.json"),
                 "sessions.json" => file_name == "sessions.json",
                 "wire.jsonl" => file_name == "wire.jsonl",
+                "ui_messages.json" => file_name == "ui_messages.json",
                 _ => false,
             }
         })
@@ -191,6 +204,8 @@ pub fn scan_all_sources(home_dir: &str, sources: &[String]) -> ScanResult {
     let include_openclaw = include_all || sources.iter().any(|s| s == "openclaw");
     let include_pi = include_all || sources.iter().any(|s| s == "pi");
     let include_kimi = include_all || sources.iter().any(|s| s == "kimi");
+    let include_roocode = include_all || sources.iter().any(|s| s == "roocode");
+    let include_kilocode = include_all || sources.iter().any(|s| s == "kilocode");
 
     let headless_roots = headless_roots(home_dir);
 
@@ -293,6 +308,50 @@ pub fn scan_all_sources(home_dir: &str, sources: &[String]) -> ScanResult {
         tasks.push((SessionType::Kimi, kimi_path, "wire.jsonl"));
     }
 
+    if include_roocode {
+        // Roo Code (VS Code extension): ~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json
+        let roocode_local_path = format!(
+            "{}/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
+            home_dir
+        );
+        tasks.push((SessionType::RooCode, roocode_local_path, "ui_messages.json"));
+
+        // Remote/server VS Code path: ~/.vscode-server/data/User/globalStorage/<ext>/tasks
+        let roocode_remote_path = format!(
+            "{}/.vscode-server/data/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
+            home_dir
+        );
+        tasks.push((
+            SessionType::RooCode,
+            roocode_remote_path,
+            "ui_messages.json",
+        ));
+    }
+
+    if include_kilocode {
+        // KiloCode (VS Code extension): ~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/*/ui_messages.json
+        let kilocode_local_path = format!(
+            "{}/.config/Code/User/globalStorage/kilocode.kilo-code/tasks",
+            home_dir
+        );
+        tasks.push((
+            SessionType::KiloCode,
+            kilocode_local_path,
+            "ui_messages.json",
+        ));
+
+        // Remote/server VS Code path: ~/.vscode-server/data/User/globalStorage/<ext>/tasks
+        let kilocode_remote_path = format!(
+            "{}/.vscode-server/data/User/globalStorage/kilocode.kilo-code/tasks",
+            home_dir
+        );
+        tasks.push((
+            SessionType::KiloCode,
+            kilocode_remote_path,
+            "ui_messages.json",
+        ));
+    }
+
     // Execute scans in parallel
     let scan_results: Vec<(SessionType, Vec<PathBuf>)> = tasks
         .into_par_iter()
@@ -315,6 +374,8 @@ pub fn scan_all_sources(home_dir: &str, sources: &[String]) -> ScanResult {
             SessionType::OpenClaw => result.openclaw_files.extend(files),
             SessionType::Pi => result.pi_files.extend(files),
             SessionType::Kimi => result.kimi_files.extend(files),
+            SessionType::RooCode => result.roocode_files.extend(files),
+            SessionType::KiloCode => result.kilocode_files.extend(files),
         }
     }
 
@@ -351,8 +412,10 @@ mod tests {
             openclaw_files: vec![],
             pi_files: vec![PathBuf::from("e.jsonl")],
             kimi_files: vec![],
+            roocode_files: vec![PathBuf::from("f-ui.json")],
+            kilocode_files: vec![PathBuf::from("g-ui.json")],
         };
-        assert_eq!(result.total_files(), 5);
+        assert_eq!(result.total_files(), 7);
     }
 
     #[test]
@@ -370,16 +433,20 @@ mod tests {
             openclaw_files: vec![],
             pi_files: vec![PathBuf::from("f.jsonl")],
             kimi_files: vec![],
+            roocode_files: vec![PathBuf::from("g.json")],
+            kilocode_files: vec![PathBuf::from("h.json")],
         };
 
         let all = result.all_files();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 8);
         assert_eq!(all[0], (SessionType::OpenCode, PathBuf::from("a.json")));
         assert_eq!(all[1], (SessionType::Claude, PathBuf::from("b.jsonl")));
         assert_eq!(all[2], (SessionType::Codex, PathBuf::from("c.jsonl")));
         assert_eq!(all[3], (SessionType::Gemini, PathBuf::from("d.json")));
         assert_eq!(all[4], (SessionType::Cursor, PathBuf::from("e.csv")));
         assert_eq!(all[5], (SessionType::Pi, PathBuf::from("f.jsonl")));
+        assert_eq!(all[6], (SessionType::RooCode, PathBuf::from("g.json")));
+        assert_eq!(all[7], (SessionType::KiloCode, PathBuf::from("h.json")));
     }
 
     #[test]
@@ -442,6 +509,30 @@ mod tests {
         assert!(session_files.iter().all(|p| {
             let name = p.file_name().unwrap().to_str().unwrap();
             name.starts_with("session-") && name.ends_with(".json")
+        }));
+    }
+
+    #[test]
+    fn test_scan_directory_ui_messages_pattern() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let tasks = path.join("tasks");
+        fs::create_dir_all(tasks.join("task-a")).unwrap();
+        fs::create_dir_all(tasks.join("task-b")).unwrap();
+        fs::create_dir_all(tasks.join("task-c")).unwrap();
+
+        File::create(tasks.join("task-a").join("ui_messages.json")).unwrap();
+        File::create(tasks.join("task-b").join("ui_messages.json")).unwrap();
+        File::create(tasks.join("task-c").join("api_conversation_history.json")).unwrap();
+
+        let files = scan_directory(path.to_str().unwrap(), "ui_messages.json");
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                == "ui_messages.json"
         }));
     }
 
@@ -539,6 +630,22 @@ mod tests {
         let mut file = File::create(kimi_session.join("wire.jsonl")).unwrap();
         file.write_all(b"{\"type\": \"metadata\", \"protocol_version\": \"1.3\"}\n")
             .unwrap();
+    }
+
+    fn setup_mock_roocode_dir(base: &std::path::Path) {
+        let roo_task =
+            base.join(".config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-1");
+        fs::create_dir_all(&roo_task).unwrap();
+        let mut file = File::create(roo_task.join("ui_messages.json")).unwrap();
+        file.write_all(b"[]").unwrap();
+    }
+
+    fn setup_mock_kilocode_dir(base: &std::path::Path) {
+        let kilo_task =
+            base.join(".config/Code/User/globalStorage/kilocode.kilo-code/tasks/task-1");
+        fs::create_dir_all(&kilo_task).unwrap();
+        let mut file = File::create(kilo_task.join("ui_messages.json")).unwrap();
+        file.write_all(b"[]").unwrap();
     }
 
     fn setup_mock_openclaw_dir(base: &std::path::Path) {
@@ -771,5 +878,29 @@ mod tests {
         assert!(result.kimi_files[0].ends_with("wire.jsonl"));
         assert!(result.opencode_files.is_empty());
         assert!(result.claude_files.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_sources_roocode() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        setup_mock_roocode_dir(home);
+
+        let result = scan_all_sources(home.to_str().unwrap(), &["roocode".to_string()]);
+        assert_eq!(result.roocode_files.len(), 1);
+        assert!(result.roocode_files[0].ends_with("ui_messages.json"));
+        assert!(result.kilocode_files.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_sources_kilocode() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+        setup_mock_kilocode_dir(home);
+
+        let result = scan_all_sources(home.to_str().unwrap(), &["kilocode".to_string()]);
+        assert_eq!(result.kilocode_files.len(), 1);
+        assert!(result.kilocode_files[0].ends_with("ui_messages.json"));
+        assert!(result.roocode_files.is_empty());
     }
 }
