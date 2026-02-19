@@ -4,6 +4,7 @@ mod footer;
 mod header;
 mod models;
 mod overview;
+mod source_picker;
 pub mod spinner;
 mod stats;
 mod widgets;
@@ -47,6 +48,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     footer::render(frame, app, chunks[2]);
+
+    if app.show_source_picker {
+        source_picker::render(frame, app);
+    }
 }
 
 fn render_loading(frame: &mut Frame, app: &App, area: Rect) {

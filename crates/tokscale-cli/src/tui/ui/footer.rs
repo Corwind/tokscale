@@ -116,47 +116,30 @@ fn render_source_badges(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut x_offset = area.x;
     let is_very_narrow = app.is_very_narrow();
 
-    let source_labels = [
-        (Source::OpenCode, "1", "OC"),
-        (Source::Claude, "2", "CC"),
-        (Source::Codex, "3", "CX"),
-        (Source::Cursor, "4", "CR"),
-        (Source::Gemini, "5", "GM"),
-        (Source::Amp, "6", "AM"),
-        (Source::Droid, "7", "DR"),
-        (Source::OpenClaw, "8", "CL"),
-        (Source::Pi, "9", "PI"),
-        (Source::Kimi, "0", "KI"),
-    ];
+    let enabled_count = app.enabled_sources.len();
+    let total_count = Source::all().len();
 
-    for (source, key, short) in source_labels {
-        let enabled = app.enabled_sources.contains(&source);
-        let indicator = if enabled { "●" } else { "○" };
+    let enabled_names: Vec<&str> = Source::all()
+        .iter()
+        .filter(|s| app.enabled_sources.contains(s))
+        .map(|s| s.as_str())
+        .collect();
 
-        let badge_text = if is_very_narrow {
-            format!("[{}{}]", indicator, key)
-        } else {
-            format!("[{}{}:{}]", indicator, key, short)
-        };
-        let badge_width = badge_text.chars().count() as u16;
+    let source_text = if is_very_narrow {
+        format!("[s:{}/{}]", enabled_count, total_count)
+    } else if enabled_count == total_count {
+        "[s:Sources] All".to_string()
+    } else if enabled_count <= 3 {
+        format!("[s:Sources] {}", enabled_names.join(", "))
+    } else {
+        format!("[s:Sources] {} of {}", enabled_count, total_count)
+    };
 
-        let style = if enabled {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default().fg(app.theme.muted)
-        };
+    spans.push(Span::styled(source_text, Style::default().fg(Color::Cyan)));
+    spans.push(Span::raw(" "));
 
-        spans.push(Span::styled(badge_text, style));
-        spans.push(Span::raw(" "));
+    x_offset += 20;
 
-        app.add_click_area(
-            Rect::new(x_offset, area.y, badge_width, 1),
-            ClickAction::Source(source),
-        );
-        x_offset += badge_width + 1;
-    }
-
-    // Sort buttons (if not very narrow)
     if !is_very_narrow {
         spans.push(Span::styled("| ", Style::default().fg(app.theme.muted)));
 
@@ -202,7 +185,7 @@ fn render_help_row(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("·", Style::default().fg(app.theme.muted)),
             Span::styled("←→", Style::default().fg(app.theme.muted)),
             Span::styled("·", Style::default().fg(app.theme.muted)),
-            Span::styled("y", Style::default().fg(app.theme.muted)),
+            Span::styled("[s]", Style::default().fg(Color::Cyan)),
             Span::styled("·", Style::default().fg(app.theme.muted)),
             Span::styled("[p]", Style::default().fg(Color::Magenta)),
             Span::styled("·", Style::default().fg(app.theme.muted)),
@@ -213,9 +196,11 @@ fn render_help_row(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         vec![
             Span::styled(
-                "↑↓ scroll • ←→/tab view • y copy • ",
+                "↑↓ scroll • ←→/tab view • ",
                 Style::default().fg(app.theme.muted),
             ),
+            Span::styled("[s:sources]", Style::default().fg(Color::Cyan)),
+            Span::styled(" • ", Style::default().fg(app.theme.muted)),
             Span::styled(
                 format!("[p:{}]", app.theme.name.as_str()),
                 Style::default().fg(Color::Magenta),
@@ -233,7 +218,7 @@ fn render_help_row(frame: &mut Frame, app: &App, area: Rect) {
                     app.theme.muted
                 }),
             ),
-            Span::styled(" [-/+ interval] • ", Style::default().fg(app.theme.muted)),
+            Span::styled(" • ", Style::default().fg(app.theme.muted)),
             Span::styled("[r:refresh]", Style::default().fg(Color::Yellow)),
             Span::styled(" • e export • q quit", Style::default().fg(app.theme.muted)),
         ]

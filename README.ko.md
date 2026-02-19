@@ -214,15 +214,21 @@ tokscale models --json > report.json   # 파일로 저장
 
 - **4개 뷰**: 개요 (차트 + 상위 모델), 모델, 일별, 통계 (기여 그래프)
 - **키보드 내비게이션**:
-  - `1-4` 또는 `←/→/Tab`: 뷰 전환
+  - `←/→` 또는 `Tab`: 뷰 전환
   - `↑/↓`: 목록 탐색
-  - `c/n/t`: 비용/이름/토큰별 정렬
-  - `1-0`: 소스 토글 (OpenCode/Claude/Codex/Cursor/Gemini/Amp/Droid/OpenClaw/Pi/Kimi)
+  - `c/d/t`: 비용/날짜/토큰별 정렬
+  - `s`: 소스 선택 다이얼로그 열기 (체크박스 모달로 AI 소스 선택)
   - `p`: 9가지 색상 테마 순환
   - `r`: 데이터 새로고침
   - `e`: JSON으로 내보내기
   - `q`: 종료
-- **마우스 지원**: 탭, 버튼, 필터 클릭
+- **소스 선택 다이얼로그** (`s` 키로 열기):
+  - `↑/↓` 또는 `j/k`: 소스 탐색
+  - `Space`: 소스 켜기/끄기
+  - `a`: 모든 소스 선택
+  - `n`: 모두 해제 (하나만 유지)
+  - `Enter` 또는 `Esc`: 다이얼로그 닫기
+- **마우스 지원**: 탭, 버튼, 정렬 옵션 클릭
 - **테마**: Green, Halloween, Teal, Blue, Pink, Purple, Orange, Monochrome, YlGnBu
 - **설정 저장**: 테마 설정이 `~/.config/tokscale/tui-settings.json`에 저장됨
 

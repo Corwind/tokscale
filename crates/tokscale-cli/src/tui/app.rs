@@ -92,7 +92,6 @@ pub struct ClickArea {
 #[derive(Debug, Clone)]
 pub enum ClickAction {
     Tab(Tab),
-    Source(Source),
     Sort(SortField),
     GraphCell { week: usize, day: usize },
 }
@@ -132,6 +131,9 @@ pub struct App {
     pub background_loading: bool,
 
     pub needs_reload: bool,
+
+    pub show_source_picker: bool,
+    pub source_picker_index: usize,
 }
 
 impl App {
@@ -216,6 +218,8 @@ impl App {
             spinner_frame: 0,
             background_loading: false,
             needs_reload: false,
+            show_source_picker: false,
+            source_picker_index: 0,
         })
     }
 
@@ -256,6 +260,10 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.should_quit = true;
             return true;
+        }
+
+        if self.show_source_picker {
+            return self.handle_source_picker_key(key);
         }
 
         match key.code {
@@ -315,8 +323,8 @@ impl App {
             KeyCode::Char('e') => {
                 self.export_to_json();
             }
-            KeyCode::Char(c @ '0'..='9') => {
-                self.toggle_source(c);
+            KeyCode::Char('s') => {
+                self.open_source_picker();
             }
             KeyCode::Enter => {
                 if self.current_tab == Tab::Stats {
@@ -346,9 +354,6 @@ impl App {
                         ClickAction::Tab(tab) => {
                             self.current_tab = *tab;
                             self.reset_selection();
-                        }
-                        ClickAction::Source(source) => {
-                            self.toggle_source(source.key());
                         }
                         ClickAction::Sort(field) => {
                             self.set_sort(*field);
@@ -471,19 +476,74 @@ impl App {
         }
     }
 
-    fn toggle_source(&mut self, key: char) {
-        if let Some(source) = Source::from_key(key) {
+    fn toggle_source_at_index(&mut self, index: usize) {
+        let sources = Source::all();
+        if index < sources.len() {
+            let source = sources[index];
             if self.enabled_sources.contains(&source) {
                 if self.enabled_sources.len() > 1 {
                     self.enabled_sources.remove(&source);
-                    self.set_status(&format!("Disabled {}", source.as_str()));
                 }
             } else {
                 self.enabled_sources.insert(source);
-                self.set_status(&format!("Enabled {}", source.as_str()));
             }
-            self.needs_reload = true;
         }
+    }
+
+    fn open_source_picker(&mut self) {
+        self.show_source_picker = true;
+        self.source_picker_index = 0;
+    }
+
+    fn close_source_picker(&mut self) {
+        self.show_source_picker = false;
+        self.needs_reload = true;
+        let enabled_count = self.enabled_sources.len();
+        let total_count = Source::all().len();
+        self.set_status(&format!(
+            "{}/{} sources enabled",
+            enabled_count, total_count
+        ));
+    }
+
+    fn handle_source_picker_key(&mut self, key: KeyEvent) -> bool {
+        let source_count = Source::all().len();
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('q') => {
+                self.close_source_picker();
+            }
+            KeyCode::Enter => {
+                self.close_source_picker();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.source_picker_index == 0 {
+                    self.source_picker_index = source_count - 1;
+                } else {
+                    self.source_picker_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.source_picker_index = (self.source_picker_index + 1) % source_count;
+            }
+            KeyCode::Char(' ') => {
+                self.toggle_source_at_index(self.source_picker_index);
+            }
+            KeyCode::Char('a') => {
+                for source in Source::all() {
+                    self.enabled_sources.insert(*source);
+                }
+            }
+            KeyCode::Char('n') => {
+                let first_source = Source::all().first().copied();
+                self.enabled_sources.clear();
+                if let Some(source) = first_source {
+                    self.enabled_sources.insert(source);
+                }
+            }
+            _ => {}
+        }
+        false
     }
 
     fn toggle_auto_refresh(&mut self) {
@@ -1088,33 +1148,64 @@ mod tests {
         assert_eq!(app.sort_direction, SortDirection::Descending);
     }
 
-    // ── handle_key_event: source toggle ─────────────────────────────
+    // ── handle_key_event: source picker ───────────────────────────────
 
     #[test]
-    #[ignore] // triggers load_data() which requires network + filesystem I/O
-    fn test_handle_key_source_toggle_1_9() {
+    fn test_handle_key_opens_source_picker() {
         let mut app = make_app();
-        let initial_count = app.enabled_sources.len();
-        assert!(initial_count > 1);
+        assert!(!app.show_source_picker);
 
-        app.handle_key_event(key(KeyCode::Char('1')));
-        assert_eq!(app.enabled_sources.len(), initial_count - 1);
-        assert!(!app.enabled_sources.contains(&Source::OpenCode));
-
-        app.handle_key_event(key(KeyCode::Char('1')));
-        assert!(app.enabled_sources.contains(&Source::OpenCode));
+        app.handle_key_event(key(KeyCode::Char('s')));
+        assert!(app.show_source_picker);
+        assert_eq!(app.source_picker_index, 0);
     }
 
     #[test]
-    #[ignore] // triggers load_data() which requires network + filesystem I/O
-    fn test_handle_key_source_toggle_prevents_empty() {
+    fn test_source_picker_navigation() {
         let mut app = make_app();
-        app.enabled_sources.clear();
-        app.enabled_sources.insert(Source::OpenCode);
+        app.show_source_picker = true;
+        app.source_picker_index = 0;
 
-        app.handle_key_event(key(KeyCode::Char('1')));
-        assert_eq!(app.enabled_sources.len(), 1);
-        assert!(app.enabled_sources.contains(&Source::OpenCode));
+        app.handle_key_event(key(KeyCode::Down));
+        assert_eq!(app.source_picker_index, 1);
+
+        app.handle_key_event(key(KeyCode::Up));
+        assert_eq!(app.source_picker_index, 0);
+
+        app.handle_key_event(key(KeyCode::Up));
+        assert_eq!(app.source_picker_index, Source::all().len() - 1);
+    }
+
+    #[test]
+    fn test_source_picker_toggle() {
+        let mut app = make_app();
+        app.show_source_picker = true;
+        app.source_picker_index = 0;
+        let initial_has_opencode = app.enabled_sources.contains(&Source::OpenCode);
+
+        app.handle_key_event(key(KeyCode::Char(' ')));
+        assert_ne!(
+            app.enabled_sources.contains(&Source::OpenCode),
+            initial_has_opencode
+        );
+    }
+
+    #[test]
+    fn test_source_picker_close_on_esc() {
+        let mut app = make_app();
+        app.show_source_picker = true;
+
+        app.handle_key_event(key(KeyCode::Esc));
+        assert!(!app.show_source_picker);
+    }
+
+    #[test]
+    fn test_source_picker_close_on_enter() {
+        let mut app = make_app();
+        app.show_source_picker = true;
+
+        app.handle_key_event(key(KeyCode::Enter));
+        assert!(!app.show_source_picker);
     }
 
     // ── handle_key_event: navigation ────────────────────────────────
@@ -1321,23 +1412,6 @@ mod tests {
         };
         app.handle_mouse_event(event);
         assert_eq!(app.current_tab, Tab::Models);
-    }
-
-    #[test]
-    #[ignore] // triggers load_data() via toggle_source
-    fn test_handle_mouse_click_source() {
-        let mut app = make_app();
-        app.add_click_area(Rect::new(0, 0, 10, 2), ClickAction::Source(Source::Claude));
-        let initial_has = app.enabled_sources.contains(&Source::Claude);
-
-        let event = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 5,
-            row: 1,
-            modifiers: KeyModifiers::NONE,
-        };
-        app.handle_mouse_event(event);
-        assert_ne!(app.enabled_sources.contains(&Source::Claude), initial_has);
     }
 
     #[test]

@@ -125,37 +125,6 @@ impl Source {
         }
     }
 
-    pub fn key(&self) -> char {
-        match self {
-            Source::OpenCode => '1',
-            Source::Claude => '2',
-            Source::Codex => '3',
-            Source::Cursor => '4',
-            Source::Gemini => '5',
-            Source::Amp => '6',
-            Source::Droid => '7',
-            Source::OpenClaw => '8',
-            Source::Pi => '9',
-            Source::Kimi => '0',
-        }
-    }
-
-    pub fn from_key(key: char) -> Option<Source> {
-        match key {
-            '1' => Some(Source::OpenCode),
-            '2' => Some(Source::Claude),
-            '3' => Some(Source::Codex),
-            '4' => Some(Source::Cursor),
-            '5' => Some(Source::Gemini),
-            '6' => Some(Source::Amp),
-            '7' => Some(Source::Droid),
-            '8' => Some(Source::OpenClaw),
-            '9' => Some(Source::Pi),
-            '0' => Some(Source::Kimi),
-            _ => None,
-        }
-    }
-
     fn to_core_source(self) -> &'static str {
         match self {
             Source::OpenCode => "opencode",
@@ -722,35 +691,6 @@ mod tests {
         assert_eq!(Source::OpenClaw.as_str(), "OpenClaw");
         assert_eq!(Source::Pi.as_str(), "Pi");
         assert_eq!(Source::Kimi.as_str(), "Kimi");
-    }
-
-    #[test]
-    fn test_source_key() {
-        assert_eq!(Source::OpenCode.key(), '1');
-        assert_eq!(Source::Claude.key(), '2');
-        assert_eq!(Source::Codex.key(), '3');
-        assert_eq!(Source::Cursor.key(), '4');
-        assert_eq!(Source::Gemini.key(), '5');
-        assert_eq!(Source::Amp.key(), '6');
-        assert_eq!(Source::Droid.key(), '7');
-        assert_eq!(Source::OpenClaw.key(), '8');
-        assert_eq!(Source::Pi.key(), '9');
-        assert_eq!(Source::Kimi.key(), '0');
-    }
-
-    #[test]
-    fn test_source_from_key() {
-        assert_eq!(Source::from_key('1'), Some(Source::OpenCode));
-        assert_eq!(Source::from_key('2'), Some(Source::Claude));
-        assert_eq!(Source::from_key('3'), Some(Source::Codex));
-        assert_eq!(Source::from_key('4'), Some(Source::Cursor));
-        assert_eq!(Source::from_key('5'), Some(Source::Gemini));
-        assert_eq!(Source::from_key('6'), Some(Source::Amp));
-        assert_eq!(Source::from_key('7'), Some(Source::Droid));
-        assert_eq!(Source::from_key('8'), Some(Source::OpenClaw));
-        assert_eq!(Source::from_key('9'), Some(Source::Pi));
-        assert_eq!(Source::from_key('0'), Some(Source::Kimi));
-        assert_eq!(Source::from_key('a'), None);
     }
 
     #[test]

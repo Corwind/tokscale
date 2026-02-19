@@ -219,15 +219,21 @@ The interactive TUI mode provides:
 
 - **4 Views**: Overview (chart + top models), Models, Daily, Stats (contribution graph)
 - **Keyboard Navigation**:
-  - `1-4` or `←/→/Tab`: Switch views
+  - `←/→` or `Tab`: Switch views
   - `↑/↓`: Navigate lists
-  - `c/n/t`: Sort by cost/name/tokens
-  - `1-0`: Toggle sources (OpenCode/Claude/Codex/Cursor/Gemini/Amp/Droid/OpenClaw/Pi/Kimi)
+  - `c/d/t`: Sort by cost/date/tokens
+  - `s`: Open source picker dialog (checkbox modal to select AI sources)
   - `p`: Cycle through 9 color themes
   - `r`: Refresh data
   - `e`: Export to JSON
   - `q`: Quit
-- **Mouse Support**: Click tabs, buttons, and filters
+- **Source Picker Dialog** (press `s`):
+  - `↑/↓` or `j/k`: Navigate sources
+  - `Space`: Toggle source on/off
+  - `a`: Select all sources
+  - `n`: Select none (keeps one)
+  - `Enter` or `Esc`: Close dialog
+- **Mouse Support**: Click tabs, buttons, and sort options
 - **Themes**: Green, Halloween, Teal, Blue, Pink, Purple, Orange, Monochrome, YlGnBu
 - **Settings Persistence**: Preferences saved to `~/.config/tokscale/settings.json` (see [Configuration](#configuration))
 

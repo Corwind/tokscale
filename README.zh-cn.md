@@ -215,15 +215,21 @@ tokscale models --json > report.json   # 保存到文件
 
 - **4 个视图**：概览（图表 + 热门模型）、模型、每日、统计（贡献图）
 - **键盘导航**：
-  - `1-4` 或 `←/→/Tab`：切换视图
+  - `←/→` 或 `Tab`：切换视图
   - `↑/↓`：导航列表
-  - `c/n/t`：按成本/名称/Token 排序
-  - `1-0`：切换来源（OpenCode/Claude/Codex/Cursor/Gemini/Amp/Droid/OpenClaw/Pi/Kimi）
+  - `c/d/t`：按成本/日期/Token 排序
+  - `s`：打开来源选择对话框（复选框模态框选择 AI 来源）
   - `p`：循环 9 种颜色主题
   - `r`：刷新数据
   - `e`：导出为 JSON
   - `q`：退出
-- **鼠标支持**：点击标签、按钮和筛选器
+- **来源选择对话框**（按 `s` 打开）：
+  - `↑/↓` 或 `j/k`：导航来源
+  - `Space`：切换来源开/关
+  - `a`：全选
+  - `n`：全不选（保留一个）
+  - `Enter` 或 `Esc`：关闭对话框
+- **鼠标支持**：点击标签、按钮和排序选项
 - **主题**：Green、Halloween、Teal、Blue、Pink、Purple、Orange、Monochrome、YlGnBu
 - **设置持久化**：主题偏好保存到 `~/.config/tokscale/tui-settings.json`
 
