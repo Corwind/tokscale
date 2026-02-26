@@ -11,18 +11,18 @@ export function slugify(name: string): string {
     .replace(/[^\w\s-]/g, "")
     .replace(/[\s_]+/g, "-")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 100);
+    .slice(0, 80)
+    .replace(/^-|-$/g, "");
 }
 
 /**
  * Generate a unique slug, appending a suffix if needed.
  */
 export async function generateUniqueSlug(name: string): Promise<string> {
-  const base = slugify(name);
+  let base = slugify(name);
   if (!base) {
     // Fallback for names that slugify to empty string
-    return `group-${Date.now().toString(36)}`;
+    base = `group-${Date.now().toString(36)}`;
   }
 
   let candidate = base;

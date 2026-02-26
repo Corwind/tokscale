@@ -77,9 +77,6 @@ async function fetchGroupLeaderboardData(
   // Main query: join submissions with group_members to scope to group
   const leaderboardQuery = db
     .select({
-      rank: sql<number>`ROW_NUMBER() OVER (ORDER BY ${orderByColumn} DESC)`.as(
-        "rank"
-      ),
       userId: users.id,
       username: users.username,
       displayName: users.displayName,
@@ -120,12 +117,23 @@ async function fetchGroupLeaderboardData(
     .offset(offset);
 
   // Member count + total stats for this group
-  const [results, memberCount, groupStats] = await Promise.all([
+  const [results, memberCount, submittedUserCount, groupStats] = await Promise.all([
     leaderboardQuery,
     db
       .select({ count: sql<number>`COUNT(*)`.as("count") })
       .from(groupMembers)
       .where(eq(groupMembers.groupId, groupId)),
+    db
+      .select({ count: sql<number>`COUNT(DISTINCT ${submissions.userId})`.as("count") })
+      .from(submissions)
+      .innerJoin(
+        groupMembers,
+        and(
+          eq(groupMembers.userId, submissions.userId),
+          eq(groupMembers.groupId, groupId)
+        )
+      )
+      .where(dateFilter),
     db
       .select({
         totalTokens: sql<number>`SUM(${submissions.totalTokens})`,
@@ -143,7 +151,8 @@ async function fetchGroupLeaderboardData(
   ]);
 
   const totalMembers = Number(memberCount[0]?.count) || 0;
-  const totalPages = Math.ceil(totalMembers / limit);
+  const totalSubmittedUsers = Number(submittedUserCount[0]?.count) || 0;
+  const totalPages = Math.ceil(totalSubmittedUsers / limit);
 
   return {
     users: results.map((row, index) => ({
@@ -161,7 +170,7 @@ async function fetchGroupLeaderboardData(
     pagination: {
       page,
       limit,
-      totalUsers: totalMembers,
+      totalUsers: totalSubmittedUsers,
       totalPages,
       hasNext: page < totalPages,
       hasPrev: page > 1,
