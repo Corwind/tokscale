@@ -126,11 +126,11 @@ impl DataLoader {
         let pricing_result = rt.block_on(async { PricingService::get_or_init().await });
         let pricing = pricing_result.as_ref().ok();
 
-        let clients_to_parse: Vec<ClientId> = if include_synthetic {
-            ClientId::ALL.to_vec()
-        } else {
-            enabled_clients.to_vec()
-        };
+        // Always parse only enabled clients. Synthetic re-attribution (Strategy 1)
+        // runs on these messages after parsing — it doesn't need ALL clients, just the
+        // ones the user actually enabled. Octofriend SQLite (Strategy 2) is handled
+        // separately by the scanner when "synthetic" is in the sources list.
+        let clients_to_parse: Vec<ClientId> = enabled_clients.to_vec();
 
         let mut sources: Vec<String> = clients_to_parse
             .iter()
