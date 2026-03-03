@@ -39,14 +39,12 @@ export function HeroSection({ stargazersCount }: HeroSectionProps) {
             height={536}
           />
           <HeroVideo
+            src="/assets/landing/hero-video-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          >
-            <source src="/assets/landing/hero-video-transparent.webm" type="video/webm" />
-            <source src="/assets/landing/hero-video-transparent.mp4" type="video/mp4" />
-          </HeroVideo>
+          />
         </HeroLeft>
 
         <HeroRight>
@@ -224,6 +222,7 @@ const HeroVideo = styled.video`
   min-height: 552px;
 
   object-fit: contain;
+  mix-blend-mode: screen;
   z-index: 1;
   margin-top: 120px;
   margin-right: -40px;

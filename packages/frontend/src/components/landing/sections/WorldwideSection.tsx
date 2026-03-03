@@ -99,14 +99,12 @@ export function WorldwideSection({
           <GlobeFadeTop />
           <GlobeFadeBottom />
           <TrophyVideo
+            src="/assets/landing/trophy-cup-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          >
-            <source src="/assets/landing/trophy-cup-transparent.webm" type="video/webm" />
-            <source src="/assets/landing/trophy-cup-transparent.mp4" type="video/mp4" />
-          </TrophyVideo>
+          />
         </GlobeImageWrapper>
         <GlobeContentStack>
           <GlobeBlueHeader ref={blueHeaderRef}>
@@ -544,6 +542,7 @@ const TrophyVideo = styled.video`
   left: 50%;
   transform: translate(-50%, -50%);
   object-fit: contain;
+  mix-blend-mode: screen;
   pointer-events: none;
   z-index: 2;
 `;
