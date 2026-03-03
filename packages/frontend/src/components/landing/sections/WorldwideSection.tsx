@@ -103,7 +103,7 @@ export function WorldwideSection({
             loop
             muted
             playsInline
-            src="/assets/landing/trophy-cup-transparent.mp4"
+            src="/assets/landing/trophy-cup-transparent.webm"
           />
         </GlobeImageWrapper>
         <GlobeContentStack>
