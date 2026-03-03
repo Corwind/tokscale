@@ -224,7 +224,6 @@ const HeroVideo = styled.video`
   min-height: 552px;
 
   object-fit: contain;
-  mix-blend-mode: lighten;
   z-index: 1;
   margin-top: 120px;
   margin-right: -40px;
