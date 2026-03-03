@@ -39,12 +39,14 @@ export function HeroSection({ stargazersCount }: HeroSectionProps) {
             height={536}
           />
           <HeroVideo
-            src="/assets/landing/hero-video-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          />
+          >
+            <source src="/assets/landing/hero-video-transparent.webm" type="video/webm" />
+            <source src="/assets/landing/hero-video-transparent.mp4" type="video/mp4" />
+          </HeroVideo>
         </HeroLeft>
 
         <HeroRight>

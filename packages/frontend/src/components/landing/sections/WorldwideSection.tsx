@@ -99,12 +99,14 @@ export function WorldwideSection({
           <GlobeFadeTop />
           <GlobeFadeBottom />
           <TrophyVideo
-            src="/assets/landing/trophy-cup-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          />
+          >
+            <source src="/assets/landing/trophy-cup-transparent.webm" type="video/webm" />
+            <source src="/assets/landing/trophy-cup-transparent.mp4" type="video/mp4" />
+          </TrophyVideo>
         </GlobeImageWrapper>
         <GlobeContentStack>
           <GlobeBlueHeader ref={blueHeaderRef}>
