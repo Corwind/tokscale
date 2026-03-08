@@ -43,11 +43,22 @@ else
     fi
 
     if [ "${#CANDIDATE}" -gt "$MAX_LEN" ]; then
-      send_message "$CHUNK"
-      echo "✅ Sent part $PART (${#CHUNK} chars)"
-      sleep 1
-      CHUNK="$line"
-      PART=$((PART + 1))
+      if [ -n "$CHUNK" ]; then
+        send_message "$CHUNK"
+        echo "✅ Sent part $PART (${#CHUNK} chars)"
+        sleep 1
+        PART=$((PART + 1))
+      fi
+      # If a single line exceeds MAX_LEN, force-send it (Discord may truncate)
+      if [ "${#line}" -gt "$MAX_LEN" ]; then
+        send_message "${line:0:$MAX_LEN}"
+        echo "✅ Sent part $PART (truncated oversized line)"
+        sleep 1
+        CHUNK=""
+        PART=$((PART + 1))
+      else
+        CHUNK="$line"
+      fi
     else
       CHUNK="$CANDIDATE"
     fi
