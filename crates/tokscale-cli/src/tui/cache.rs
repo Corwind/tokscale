@@ -384,7 +384,10 @@ pub fn load_cache(enabled_clients: &HashSet<ClientId>, include_synthetic: bool) 
         Ok(c) => c,
         Err(_) => return CacheResult::Miss,
     };
-    let schema_outdated = cached.schema_version != CACHE_SCHEMA_VERSION;
+    if cached.schema_version > CACHE_SCHEMA_VERSION {
+        return CacheResult::Miss;
+    }
+    let schema_outdated = cached.schema_version < CACHE_SCHEMA_VERSION;
 
     // Check how cached clients relate to enabled clients
     let client_match = check_client_match(
