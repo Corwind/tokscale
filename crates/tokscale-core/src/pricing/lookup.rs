@@ -1094,6 +1094,21 @@ fn is_reseller_provider(key: &str) -> bool {
         .any(|prefix| lower.starts_with(prefix))
 }
 
+/// Returns true if the pricing entry has at least one valid cost field.
+/// Entries with no pricing data (e.g. routing-only entries like perplexity/anthropic/*)
+/// should not be treated as valid matches.
+fn has_any_pricing(pricing: &ModelPricing) -> bool {
+    [
+        pricing.input_cost_per_token,
+        pricing.output_cost_per_token,
+        pricing.cache_read_input_token_cost,
+        pricing.cache_creation_input_token_cost,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| v > 0.0)
+}
+
 fn select_best_match(
     matches: &[&String],
     dataset: &HashMap<String, ModelPricing>,
@@ -1104,18 +1119,33 @@ fn select_best_match(
         return None;
     }
 
+    // Filter out entries that have no pricing data (routing-only entries).
+    let priced_matches: Vec<&String> = matches
+        .iter()
+        .copied()
+        .filter(|key| {
+            dataset
+                .get(key.as_str())
+                .is_some_and(|p| has_any_pricing(p))
+        })
+        .collect();
+
+    if priced_matches.is_empty() {
+        return None;
+    }
+
     let hint_tags: Vec<String> = provider_id
         .map(provider_identity::provider_tags)
         .unwrap_or_default();
 
-    let provider_matches: Vec<&String> = matches
+    let provider_matches: Vec<&String> = priced_matches
         .iter()
         .copied()
         .filter(|key| provider_identity::matches_provider_hint_with_tags(key, &hint_tags))
         .collect();
 
     let preferred_matches = if provider_matches.is_empty() {
-        matches
+        priced_matches.as_slice()
     } else {
         provider_matches.as_slice()
     };
@@ -3308,6 +3338,55 @@ mod tests {
         assert_eq!(
             r_unknown.matched_key, r_none.matched_key,
             "unknown hint via source_and_provider should behave like None"
+        );
+    }
+
+    #[test]
+    fn test_provider_aware_skips_routing_only_entry_without_pricing() {
+        // Reproduces the opus 4.6 $0 cost bug: LiteLLM has a
+        // "perplexity/anthropic/claude-opus-4-6" entry that matches the
+        // "anthropic" provider hint but has NO pricing data (it's a
+        // routing-only entry). The provider-aware lookup must skip it
+        // and fall through to the plain "claude-opus-4-6" key.
+        let mut litellm = HashMap::new();
+        litellm.insert(
+            "claude-opus-4-6".into(),
+            ModelPricing {
+                input_cost_per_token: Some(0.000005),
+                output_cost_per_token: Some(0.000025),
+                cache_read_input_token_cost: Some(0.0000005),
+                cache_creation_input_token_cost: Some(0.00000625),
+                ..Default::default()
+            },
+        );
+        // Routing-only entry — no pricing fields at all
+        litellm.insert(
+            "perplexity/anthropic/claude-opus-4-6".into(),
+            ModelPricing::default(),
+        );
+
+        let lookup = PricingLookup::new(litellm, HashMap::new(), HashMap::new());
+
+        // Provider-aware lookup with "anthropic" hint
+        let result = lookup
+            .lookup_with_provider("claude-opus-4-6", Some("anthropic"))
+            .expect("should resolve to the plain key with actual pricing");
+        assert_eq!(result.matched_key, "claude-opus-4-6");
+        assert_eq!(result.pricing.input_cost_per_token, Some(0.000005));
+
+        // Cost should be non-zero
+        let cost =
+            lookup.calculate_cost_with_provider("claude-opus-4-6", Some("anthropic"), &crate::TokenBreakdown {
+                input: 1000,
+                output: 500,
+                cache_read: 10_000_000,
+                cache_write: 500_000,
+                reasoning: 0,
+            });
+        assert!(
+            cost > 0.0,
+            "cost should be positive, got {}",
+            cost
         );
     }
 }
