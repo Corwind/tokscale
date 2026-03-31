@@ -4,10 +4,12 @@
 
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::clients::ClientId;
+use serde::Deserialize;
+use serde_json::Value;
 
 /// Result of scanning all session directories
 #[derive(Debug)]
@@ -16,6 +18,7 @@ pub struct ScanResult {
     pub opencode_db: Option<PathBuf>,
     pub synthetic_db: Option<PathBuf>,
     pub kilo_db: Option<PathBuf>,
+    pub crush_dbs: Vec<PathBuf>,
     /// Path to the OpenCode legacy JSON directory (for migration cache stat checks)
     pub opencode_json_dir: Option<PathBuf>,
 }
@@ -27,6 +30,7 @@ impl Default for ScanResult {
             opencode_db: None,
             synthetic_db: None,
             kilo_db: None,
+            crush_dbs: Vec::new(),
             opencode_json_dir: None,
         }
     }
@@ -194,11 +198,68 @@ pub fn parse_extra_dirs(value: &str, enabled: &HashSet<ClientId>) -> Vec<(Client
         .collect()
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct CrushProjectList {
+    #[serde(default)]
+    projects: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CrushProject {
+    path: String,
+    data_dir: String,
+}
+
+fn crush_db_path(data_dir: &Path) -> Option<PathBuf> {
+    let candidate = data_dir.join("crush.db");
+    candidate.is_file().then_some(candidate)
+}
+
+fn resolve_crush_data_dir(project: &CrushProject) -> PathBuf {
+    let data_dir = PathBuf::from(&project.data_dir);
+    if data_dir.is_absolute() {
+        data_dir
+    } else {
+        PathBuf::from(&project.path).join(data_dir)
+    }
+}
+
+fn scan_crush_registry(registry_path: &Path) -> Vec<PathBuf> {
+    let registry = match std::fs::read_to_string(registry_path) {
+        Ok(contents) => contents,
+        Err(_) => return Vec::new(),
+    };
+
+    let list: CrushProjectList = match serde_json::from_str(&registry) {
+        Ok(list) => list,
+        Err(_) => return Vec::new(),
+    };
+
+    list.projects
+        .into_iter()
+        .filter_map(|project| serde_json::from_value::<CrushProject>(project).ok())
+        .filter_map(|project| crush_db_path(&resolve_crush_data_dir(&project)))
+        .collect()
+}
+
+fn discover_crush_dbs(home_dir: &str, use_env_roots: bool) -> Vec<PathBuf> {
+    let registry_path = PathBuf::from(
+        ClientId::Crush
+            .data()
+            .resolve_path_with_env_strategy(home_dir, use_env_roots),
+    );
+    let mut dbs = scan_crush_registry(&registry_path);
+    dbs.sort();
+    dbs.dedup();
+    dbs
+}
+
 fn supports_extra_dir_scanning(client_id: ClientId) -> bool {
-    // Kilo currently loads a single SQLite DB via `scan_result.kilo_db` rather than
-    // consuming scanned file lists, so accepting `kilo:` extra dirs would silently
-    // advertise unsupported behavior.
-    !matches!(client_id, ClientId::Kilo)
+    // Kilo CLI currently loads a single SQLite DB via `scan_result.kilo_db`
+    // rather than consuming scanned file lists, KiloCode uses dedicated local
+    // and server task roots, and Crush discovers SQLite DBs via the project
+    // registry rather than scanned file paths.
+    !matches!(client_id, ClientId::Kilo | ClientId::Crush)
 }
 
 /// Scan all session client directories in parallel
@@ -233,14 +294,16 @@ pub fn scan_all_clients_with_env_strategy(
                 | ClientId::Codex
                 | ClientId::OpenClaw
                 | ClientId::RooCode
+                | ClientId::KiloCode
                 | ClientId::Kilo
+                | ClientId::Crush
         ) {
             continue;
         }
 
         let def = client_id.data();
         let path = def.resolve_path_with_env_strategy(home_dir, use_env_roots);
-        tasks.push((*client_id, path, def.pattern()));
+        tasks.push((*client_id, path, def.pattern));
     }
 
     // Extra scan directories are part of the caller's environment, so they are
@@ -248,7 +311,7 @@ pub fn scan_all_clients_with_env_strategy(
     if use_env_roots {
         let extra_dirs_val = std::env::var("TOKSCALE_EXTRA_DIRS").unwrap_or_default();
         for (client_id, path) in parse_extra_dirs(&extra_dirs_val, &enabled) {
-            let pattern = client_id.data().pattern();
+            let pattern = client_id.data().pattern;
             tasks.push((client_id, path, pattern));
         }
     }
@@ -274,7 +337,7 @@ pub fn scan_all_clients_with_env_strategy(
         tasks.push((
             ClientId::OpenCode,
             opencode_path,
-            ClientId::OpenCode.data().pattern(),
+            ClientId::OpenCode.data().pattern,
         ));
     }
 
@@ -288,25 +351,21 @@ pub fn scan_all_clients_with_env_strategy(
         let codex_path = ClientId::Codex
             .data()
             .resolve_path_with_env_strategy(home_dir, use_env_roots);
-        tasks.push((
-            ClientId::Codex,
-            codex_path,
-            ClientId::Codex.data().pattern(),
-        ));
+        tasks.push((ClientId::Codex, codex_path, ClientId::Codex.data().pattern));
 
         // Codex archived sessions: ~/.codex/archived_sessions/**/*.jsonl
         let codex_archived_path = format!("{}/archived_sessions", codex_home);
         tasks.push((
             ClientId::Codex,
             codex_archived_path,
-            ClientId::Codex.data().pattern(),
+            ClientId::Codex.data().pattern,
         ));
 
         // Codex headless: <headless_root>/codex/*.jsonl
         for root in &headless_roots {
             let codex_headless_path = root.join("codex");
             let path = codex_headless_path.to_string_lossy().to_string();
-            tasks.push((ClientId::Codex, path, ClientId::Codex.data().pattern()));
+            tasks.push((ClientId::Codex, path, ClientId::Codex.data().pattern));
         }
     }
 
@@ -318,7 +377,7 @@ pub fn scan_all_clients_with_env_strategy(
         tasks.push((
             ClientId::OpenClaw,
             openclaw_path,
-            ClientId::OpenClaw.data().pattern(),
+            ClientId::OpenClaw.data().pattern,
         ));
 
         // Legacy paths (Clawd -> Moltbot -> OpenClaw rebrand history)
@@ -326,21 +385,21 @@ pub fn scan_all_clients_with_env_strategy(
         tasks.push((
             ClientId::OpenClaw,
             clawdbot_path,
-            ClientId::OpenClaw.data().pattern(),
+            ClientId::OpenClaw.data().pattern,
         ));
 
         let moltbot_path = format!("{}/.moltbot/agents", home_dir);
         tasks.push((
             ClientId::OpenClaw,
             moltbot_path,
-            ClientId::OpenClaw.data().pattern(),
+            ClientId::OpenClaw.data().pattern,
         ));
 
         let moldbot_path = format!("{}/.moldbot/agents", home_dir);
         tasks.push((
             ClientId::OpenClaw,
             moldbot_path,
-            ClientId::OpenClaw.data().pattern(),
+            ClientId::OpenClaw.data().pattern,
         ));
     }
 
@@ -363,7 +422,7 @@ pub fn scan_all_clients_with_env_strategy(
         tasks.push((
             ClientId::RooCode,
             local_path,
-            ClientId::RooCode.data().pattern(),
+            ClientId::RooCode.data().pattern,
         ));
 
         let server_path = format!(
@@ -373,30 +432,42 @@ pub fn scan_all_clients_with_env_strategy(
         tasks.push((
             ClientId::RooCode,
             server_path,
-            ClientId::RooCode.data().pattern(),
+            ClientId::RooCode.data().pattern,
         ));
     }
 
-    if enabled.contains(&ClientId::Kilo) {
-        let local_path = ClientId::Kilo
+    if enabled.contains(&ClientId::KiloCode) {
+        let local_path = ClientId::KiloCode
             .data()
             .resolve_path_with_env_strategy(home_dir, use_env_roots);
-        tasks.push((ClientId::Kilo, local_path, ClientId::Kilo.data().pattern()));
+        tasks.push((
+            ClientId::KiloCode,
+            local_path,
+            ClientId::KiloCode.data().pattern,
+        ));
 
         let server_path = format!(
             "{}/.vscode-server/data/User/globalStorage/kilocode.kilo-code/tasks",
             home_dir
         );
-        tasks.push((ClientId::Kilo, server_path, ClientId::Kilo.data().pattern()));
+        tasks.push((
+            ClientId::KiloCode,
+            server_path,
+            ClientId::KiloCode.data().pattern,
+        ));
     }
 
     if enabled.contains(&ClientId::Kilo) {
-        if let Some(cli_source) = ClientId::Kilo.data().source_by_tag("cli") {
-            let kilo_db_path = cli_source.resolve_path_with_env_strategy(home_dir, use_env_roots);
-            if std::path::Path::new(&kilo_db_path).exists() {
-                result.kilo_db = Some(PathBuf::from(kilo_db_path));
-            }
+        let kilo_db_path = ClientId::Kilo
+            .data()
+            .resolve_path_with_env_strategy(home_dir, use_env_roots);
+        if std::path::Path::new(&kilo_db_path).exists() {
+            result.kilo_db = Some(PathBuf::from(kilo_db_path));
         }
+    }
+
+    if enabled.contains(&ClientId::Crush) {
+        result.crush_dbs = discover_crush_dbs(home_dir, use_env_roots);
     }
 
     // Execute scans in parallel
@@ -438,6 +509,10 @@ mod tests {
             Some(value) => unsafe { std::env::set_var(var, value) },
             None => unsafe { std::env::remove_var(var) },
         }
+    }
+
+    fn restore_current_dir(previous: &Path) {
+        std::env::set_current_dir(previous).unwrap();
     }
 
     #[test]
@@ -743,6 +818,11 @@ mod tests {
         File::create(server.join("ui_messages.json")).unwrap();
     }
 
+    fn setup_mock_crush_registry(registry_path: &Path, projects_json: &str) {
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        fs::write(registry_path, projects_json).unwrap();
+    }
+
     #[test]
     #[serial]
     fn test_headless_roots_default() {
@@ -934,6 +1014,134 @@ mod tests {
     }
 
     #[test]
+    fn test_scan_crush_registry_resolves_relative_and_absolute_data_dirs() {
+        let dir = TempDir::new().unwrap();
+        let project_a = dir.path().join("project-a");
+        let project_b_data = dir.path().join("project-b-data");
+        fs::create_dir_all(project_a.join(".crush")).unwrap();
+        fs::create_dir_all(&project_b_data).unwrap();
+        File::create(project_a.join(".crush").join("crush.db")).unwrap();
+        File::create(project_b_data.join("crush.db")).unwrap();
+
+        let registry_path = dir.path().join("projects.json");
+        let projects_json = format!(
+            r#"{{
+  "projects": [
+    {{ "path": "{}", "data_dir": ".crush" }},
+    {{ "path": "{}", "data_dir": "{}" }},
+    {{ "path": "{}", "data_dir": ".crush" }}
+  ]
+}}"#,
+            project_a.display(),
+            dir.path().join("project-b").display(),
+            project_b_data.display(),
+            dir.path().join("missing-project").display(),
+        );
+        setup_mock_crush_registry(&registry_path, &projects_json);
+
+        let result = scan_crush_registry(&registry_path);
+        assert_eq!(
+            result,
+            vec![
+                project_a.join(".crush").join("crush.db"),
+                project_b_data.join("crush.db"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scan_crush_registry_skips_malformed_project_entries() {
+        let dir = TempDir::new().unwrap();
+        let valid_project = dir.path().join("valid-project");
+        fs::create_dir_all(valid_project.join(".crush")).unwrap();
+        File::create(valid_project.join(".crush").join("crush.db")).unwrap();
+
+        let registry_path = dir.path().join("projects.json");
+        let projects_json = format!(
+            r#"{{
+  "projects": [
+    {{ "path": "{}", "data_dir": ".crush" }},
+    {{ "path": 123, "data_dir": ".crush" }},
+    {{ "data_dir": ".crush" }},
+    "not-an-object"
+  ]
+}}"#,
+            valid_project.display()
+        );
+        setup_mock_crush_registry(&registry_path, &projects_json);
+
+        let result = scan_crush_registry(&registry_path);
+        assert_eq!(result, vec![valid_project.join(".crush").join("crush.db")]);
+    }
+
+    #[test]
+    #[serial]
+    fn test_discover_crush_dbs_ignores_cwd_without_override() {
+        let previous_xdg = std::env::var("XDG_DATA_HOME").ok();
+        let previous_dir = std::env::current_dir().unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path().join("home");
+        let project = dir.path().join("workspace");
+        let nested = project.join("src/subdir");
+        let xdg = dir.path().join("xdg");
+
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(xdg.join("crush")).unwrap();
+        fs::create_dir_all(project.join(".crush")).unwrap();
+        File::create(project.join(".crush").join("crush.db")).unwrap();
+        fs::write(
+            xdg.join("crush").join("projects.json"),
+            r#"{"projects":[]}"#,
+        )
+        .unwrap();
+
+        unsafe { std::env::set_var("XDG_DATA_HOME", &xdg) };
+        std::env::set_current_dir(&nested).unwrap();
+
+        let result = discover_crush_dbs(home.to_str().unwrap(), false);
+        assert!(result.is_empty());
+
+        restore_current_dir(&previous_dir);
+        restore_env("XDG_DATA_HOME", previous_xdg);
+    }
+
+    #[test]
+    #[serial]
+    fn test_scan_all_clients_crush_populates_crush_db_paths() {
+        let previous_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        let dir = TempDir::new().unwrap();
+        let home = dir.path().join("home");
+        let xdg = dir.path().join("xdg");
+        let project = dir.path().join("project");
+        let data_dir = project.join(".crush");
+
+        fs::create_dir_all(xdg.join("crush")).unwrap();
+        fs::create_dir_all(&data_dir).unwrap();
+        File::create(data_dir.join("crush.db")).unwrap();
+
+        let registry_path = xdg.join("crush").join("projects.json");
+        let projects_json = format!(
+            r#"{{
+  "projects": [
+    {{ "path": "{}", "data_dir": ".crush" }}
+  ]
+}}"#,
+            project.display()
+        );
+        setup_mock_crush_registry(&registry_path, &projects_json);
+
+        unsafe { std::env::set_var("XDG_DATA_HOME", &xdg) };
+
+        let result = scan_all_clients(home.to_str().unwrap(), &["crush".to_string()]);
+        assert_eq!(result.crush_dbs, vec![data_dir.join("crush.db")]);
+        assert!(result.get(ClientId::Crush).is_empty());
+
+        restore_env("XDG_DATA_HOME", previous_xdg);
+    }
+
+    #[test]
     #[serial]
     fn test_scan_all_clients_headless_paths() {
         let previous_headless = std::env::var("TOKSCALE_HEADLESS_DIR").ok();
@@ -1079,10 +1287,10 @@ mod tests {
         let home = dir.path();
         setup_mock_kilocode_dir(home);
 
-        let result = scan_all_clients(home.to_str().unwrap(), &["kilo".to_string()]);
-        assert_eq!(result.get(ClientId::Kilo).len(), 2);
+        let result = scan_all_clients(home.to_str().unwrap(), &["kilocode".to_string()]);
+        assert_eq!(result.get(ClientId::KiloCode).len(), 2);
         assert!(result
-            .get(ClientId::Kilo)
+            .get(ClientId::KiloCode)
             .iter()
             .all(|p| p.ends_with("ui_messages.json")));
     }

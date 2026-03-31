@@ -303,7 +303,10 @@ pub fn test_data_loading() -> Result<()> {
         ClientId::Kimi,
         ClientId::Qwen,
         ClientId::RooCode,
+        ClientId::KiloCode,
         ClientId::Kilo,
+        ClientId::Mux,
+        ClientId::Crush,
     ];
 
     let data = loader.load(&all_clients, &tokscale_core::GroupBy::default(), false)?;

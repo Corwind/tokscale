@@ -5,6 +5,7 @@
 pub mod amp;
 pub mod claudecode;
 pub mod codex;
+pub mod crush;
 pub mod cursor;
 pub mod droid;
 pub mod gemini;
@@ -34,8 +35,14 @@ pub struct UnifiedMessage {
     pub date: String,
     pub tokens: TokenBreakdown,
     pub cost: f64,
+    #[serde(default = "default_message_count")]
+    pub message_count: i32,
     pub agent: Option<String>,
     pub dedup_key: Option<String>,
+}
+
+const fn default_message_count() -> i32 {
+    1
 }
 
 pub fn normalize_agent_name(agent: &str) -> String {
@@ -225,6 +232,7 @@ impl UnifiedMessage {
             date,
             tokens,
             cost,
+            message_count: default_message_count(),
             agent,
             dedup_key,
         }

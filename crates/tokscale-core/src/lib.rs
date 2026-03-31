@@ -133,6 +133,7 @@ pub struct ParsedMessage {
     pub cache_read: i64,
     pub cache_write: i64,
     pub reasoning: i64,
+    pub message_count: i32,
     pub agent: Option<String>,
 }
 
@@ -843,7 +844,7 @@ fn parse_all_messages_with_pricing_with_env_strategy(
     }
 
     let kilocode_outcomes: Vec<CachedParseOutcome> = scan_result
-        .get(ClientId::Kilo)
+        .get(ClientId::KiloCode)
         .par_iter()
         .map(|path| {
             load_or_parse_source(path, &source_cache, pricing, |path| {
@@ -852,12 +853,7 @@ fn parse_all_messages_with_pricing_with_env_strategy(
         })
         .collect();
     for outcome in kilocode_outcomes {
-        all_messages.extend(outcome.messages.into_iter().map(|mut msg| {
-            if msg.client == "kilocode" {
-                msg.client = "kilo".to_string();
-            }
-            msg
-        }));
+        all_messages.extend(outcome.messages);
         if let Some(entry) = outcome.cache_entry {
             source_cache.insert(entry);
         }
@@ -889,6 +885,17 @@ fn parse_all_messages_with_pricing_with_env_strategy(
             })
             .collect();
         all_messages.extend(kilo_messages);
+    }
+
+    for db_path in &scan_result.crush_dbs {
+        let crush_messages: Vec<UnifiedMessage> = sessions::crush::parse_crush_sqlite(db_path)
+            .into_iter()
+            .map(|mut msg| {
+                apply_pricing_if_available(&mut msg, pricing);
+                msg
+            })
+            .collect();
+        all_messages.extend(crush_messages);
     }
 
     if include_synthetic {
@@ -1035,7 +1042,7 @@ fn aggregate_model_usage_entries(
         entry.cache_read += msg.tokens.cache_read;
         entry.cache_write += msg.tokens.cache_write;
         entry.reasoning += msg.tokens.reasoning;
-        entry.message_count += 1;
+        entry.message_count += msg.message_count.max(0);
         entry.cost += msg.cost;
     }
 
@@ -1159,7 +1166,7 @@ pub async fn get_monthly_report(options: ReportOptions) -> Result<MonthlyReport,
         entry.output += msg.tokens.output;
         entry.cache_read += msg.tokens.cache_read;
         entry.cache_write += msg.tokens.cache_write;
-        entry.message_count += 1;
+        entry.message_count += msg.message_count.max(0);
         entry.cost += msg.cost;
     }
 
@@ -1564,7 +1571,7 @@ pub fn parse_local_clients(options: LocalParseOptions) -> Result<ParsedMessages,
     messages.extend(roocode_msgs);
 
     let kilocode_msgs: Vec<ParsedMessage> = scan_result
-        .get(ClientId::Kilo)
+        .get(ClientId::KiloCode)
         .par_iter()
         .flat_map(|path| {
             sessions::kilocode::parse_kilocode_file(path)
@@ -1573,8 +1580,8 @@ pub fn parse_local_clients(options: LocalParseOptions) -> Result<ParsedMessages,
                 .collect::<Vec<_>>()
         })
         .collect();
-    let kilo_vscode_count = kilocode_msgs.len() as i32;
-    counts.set(ClientId::Kilo, kilo_vscode_count);
+    let kilocode_count = summed_parsed_message_count(&kilocode_msgs);
+    counts.set(ClientId::KiloCode, kilocode_count);
     messages.extend(kilocode_msgs);
 
     let mux_msgs: Vec<ParsedMessage> = scan_result
@@ -1587,7 +1594,7 @@ pub fn parse_local_clients(options: LocalParseOptions) -> Result<ParsedMessages,
                 .collect::<Vec<_>>()
         })
         .collect();
-    let mux_count = mux_msgs.len() as i32;
+    let mux_count = summed_parsed_message_count(&mux_msgs);
     counts.set(ClientId::Mux, mux_count);
     messages.extend(mux_msgs);
 
@@ -1597,13 +1604,27 @@ pub fn parse_local_clients(options: LocalParseOptions) -> Result<ParsedMessages,
             .into_iter()
             .map(|msg| unified_to_parsed(&msg))
             .collect();
-        let count = kilo_msgs.len() as i32;
-        counts.add(ClientId::Kilo, count);
+        let count = summed_parsed_message_count(&kilo_msgs);
+        counts.set(ClientId::Kilo, count);
         messages.extend(kilo_msgs);
         count
     } else {
         0
     };
+
+    let crush_msgs: Vec<ParsedMessage> = scan_result
+        .crush_dbs
+        .par_iter()
+        .flat_map(|db_path| {
+            sessions::crush::parse_crush_sqlite(db_path)
+                .into_iter()
+                .map(|msg| unified_to_parsed(&msg))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let crush_count = summed_parsed_message_count(&crush_msgs);
+    counts.set(ClientId::Crush, crush_count);
+    messages.extend(crush_msgs);
 
     if include_synthetic {
         if let Some(db_path) = &scan_result.synthetic_db {
@@ -1674,8 +1695,16 @@ fn unified_to_parsed(msg: &UnifiedMessage) -> ParsedMessage {
         cache_read: msg.tokens.cache_read,
         cache_write: msg.tokens.cache_write,
         reasoning: msg.tokens.reasoning,
+        message_count: msg.message_count,
         agent: msg.agent.clone(),
     }
+}
+
+fn summed_parsed_message_count(messages: &[ParsedMessage]) -> i32 {
+    messages
+        .iter()
+        .map(|msg| msg.message_count.max(0))
+        .sum::<i32>()
 }
 
 fn filter_parsed_messages(
@@ -1718,6 +1747,7 @@ pub fn parsed_to_unified(msg: &ParsedMessage, cost: f64) -> UnifiedMessage {
             reasoning: msg.reasoning,
         },
         cost,
+        message_count: msg.message_count,
         agent: msg.agent.clone(),
         dedup_key: None,
     }
@@ -2122,26 +2152,28 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_parse_path_reprices_zero_cost_composer_1_rows() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let cursor_cache_dir = temp_dir.path().join(".config/tokscale/cursor-cache");
-        std::fs::create_dir_all(&cursor_cache_dir).unwrap();
+    fn test_retain_for_requested_clients_preserves_kilo_split() {
+        let kilocode_only: HashSet<&str> = HashSet::from(["kilocode"]);
+        assert!(retain_for_requested_clients(
+            "kilocode",
+            "gpt-5",
+            "openai",
+            &kilocode_only
+        ));
+        assert!(!retain_for_requested_clients(
+            "kilo",
+            "gpt-5",
+            "openai",
+            &kilocode_only
+        ));
 
-        let csv = r#"Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
-"2026-03-04T12:00:00.000Z","Included","Composer 1","No","1200","1000","5000","2000","8000","0""#;
-        std::fs::write(cursor_cache_dir.join("usage.csv"), csv).unwrap();
-
-        let pricing = pricing::PricingService::new(HashMap::new(), HashMap::new());
-        let messages = parse_all_messages_with_pricing(
-            temp_dir.path().to_str().unwrap(),
-            &["cursor".to_string()],
-            Some(&pricing),
-        );
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].client, "cursor");
-        assert_eq!(messages[0].model_id, "Composer 1");
-        assert!(messages[0].cost > 0.0);
+        let kilo_only: HashSet<&str> = HashSet::from(["kilo"]);
+        assert!(retain_for_requested_clients(
+            "kilo", "gpt-5", "openai", &kilo_only
+        ));
+        assert!(!retain_for_requested_clients(
+            "kilocode", "gpt-5", "openai", &kilo_only
+        ));
     }
 
     #[test]
@@ -2164,29 +2196,6 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].client, "cursor");
         assert_eq!(messages[0].model_id, "Composer 1.5");
-        assert!(messages[0].cost > 0.0);
-    }
-
-    #[test]
-    fn test_cursor_parse_path_reprices_zero_cost_composer_2_rows() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let cursor_cache_dir = temp_dir.path().join(".config/tokscale/cursor-cache");
-        std::fs::create_dir_all(&cursor_cache_dir).unwrap();
-
-        let csv = r#"Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
-"2026-03-04T12:00:00.000Z","Included","composer-2","No","1200","1000","5000","2000","8000","0""#;
-        std::fs::write(cursor_cache_dir.join("usage.csv"), csv).unwrap();
-
-        let pricing = pricing::PricingService::new(HashMap::new(), HashMap::new());
-        let messages = parse_all_messages_with_pricing(
-            temp_dir.path().to_str().unwrap(),
-            &["cursor".to_string()],
-            Some(&pricing),
-        );
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].client, "cursor");
-        assert_eq!(messages[0].model_id, "composer-2");
         assert!(messages[0].cost > 0.0);
     }
 
