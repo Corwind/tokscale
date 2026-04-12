@@ -3144,8 +3144,9 @@ fn run_clients_command(json: bool) -> Result<()> {
                     headless_supported,
                     headless_paths,
                     headless_message_count,
-                    exporter_status: (client == ClientId::Copilot && copilot_exporter_path.is_some())
-                        .then(|| "configured".to_string()),
+                    exporter_status: (client == ClientId::Copilot
+                        && copilot_exporter_path.is_some())
+                    .then(|| "configured".to_string()),
                     extra_paths,
                 }
             })
