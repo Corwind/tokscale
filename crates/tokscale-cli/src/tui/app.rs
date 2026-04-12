@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokscale_core::ClientId;
 
-use super::data::{AgentUsage, DailyUsage, DataLoader, ModelUsage, UsageData};
+use super::data::{AgentUsage, DailyUsage, DataLoader, HourlyUsage, ModelUsage, UsageData};
 use super::settings::Settings;
 use super::themes::{Theme, ThemeName};
 use super::ui::dialog::{ClientPickerDialog, DialogStack};
@@ -30,6 +30,7 @@ pub enum Tab {
     Overview,
     Models,
     Daily,
+    Hourly,
     Stats,
     Agents,
 }
@@ -40,6 +41,7 @@ impl Tab {
             Tab::Overview,
             Tab::Models,
             Tab::Daily,
+            Tab::Hourly,
             Tab::Stats,
             Tab::Agents,
         ]
@@ -50,6 +52,7 @@ impl Tab {
             Tab::Overview => "Overview",
             Tab::Models => "Models",
             Tab::Daily => "Daily",
+            Tab::Hourly => "Hourly",
             Tab::Stats => "Stats",
             Tab::Agents => "Agents",
         }
@@ -60,6 +63,7 @@ impl Tab {
             Tab::Overview => "Ovw",
             Tab::Models => "Mod",
             Tab::Daily => "Day",
+            Tab::Hourly => "Hr",
             Tab::Stats => "Sta",
             Tab::Agents => "Agt",
         }
@@ -69,7 +73,8 @@ impl Tab {
         match self {
             Tab::Overview => Tab::Models,
             Tab::Models => Tab::Daily,
-            Tab::Daily => Tab::Stats,
+            Tab::Daily => Tab::Hourly,
+            Tab::Hourly => Tab::Stats,
             Tab::Stats => Tab::Agents,
             Tab::Agents => Tab::Overview,
         }
@@ -80,10 +85,18 @@ impl Tab {
             Tab::Overview => Tab::Agents,
             Tab::Models => Tab::Overview,
             Tab::Daily => Tab::Models,
-            Tab::Stats => Tab::Daily,
+            Tab::Hourly => Tab::Daily,
+            Tab::Stats => Tab::Hourly,
             Tab::Agents => Tab::Stats,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartGranularity {
+    #[default]
+    Daily,
+    Hourly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +104,13 @@ pub enum SortField {
     Cost,
     Tokens,
     Date,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HourlyViewMode {
+    #[default]
+    Table,
+    Profile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +144,7 @@ pub struct App {
     pub group_by: Rc<RefCell<tokscale_core::GroupBy>>,
     pub sort_field: SortField,
     pub sort_direction: SortDirection,
+    pub chart_granularity: ChartGranularity,
 
     pub scroll_offset: usize,
     pub selected_index: usize,
@@ -153,6 +174,8 @@ pub struct App {
     pub dialog_stack: DialogStack,
 
     pub dialog_needs_reload: Rc<RefCell<bool>>,
+
+    pub hourly_view_mode: HourlyViewMode,
 }
 
 impl App {
@@ -215,6 +238,7 @@ impl App {
             group_by: Rc::new(RefCell::new(tokscale_core::GroupBy::Model)),
             sort_field: SortField::Cost,
             sort_direction: SortDirection::Descending,
+            chart_granularity: ChartGranularity::default(),
             scroll_offset: 0,
             selected_index: 0,
             max_visible_items: 20,
@@ -237,6 +261,7 @@ impl App {
             needs_reload: false,
             dialog_stack,
             dialog_needs_reload,
+            hourly_view_mode: HourlyViewMode::default(),
         })
     }
 
@@ -305,18 +330,22 @@ impl App {
             }
             KeyCode::Tab => {
                 self.current_tab = self.current_tab.next();
+                self.apply_tab_sort_defaults();
                 self.reset_selection();
             }
             KeyCode::BackTab => {
                 self.current_tab = self.current_tab.prev();
+                self.apply_tab_sort_defaults();
                 self.reset_selection();
             }
             KeyCode::Left => {
                 self.current_tab = self.current_tab.prev();
+                self.apply_tab_sort_defaults();
                 self.reset_selection();
             }
             KeyCode::Right => {
                 self.current_tab = self.current_tab.next();
+                self.apply_tab_sort_defaults();
                 self.reset_selection();
             }
             KeyCode::Up => {
@@ -376,6 +405,23 @@ impl App {
             }
             KeyCode::Char('s') => {
                 self.open_client_picker();
+            }
+            KeyCode::Char('h') => {
+                if self.current_tab == Tab::Overview {
+                    self.chart_granularity = match self.chart_granularity {
+                        ChartGranularity::Daily => ChartGranularity::Hourly,
+                        ChartGranularity::Hourly => ChartGranularity::Daily,
+                    };
+                }
+            }
+            KeyCode::Char('v') => {
+                if self.current_tab == Tab::Hourly {
+                    self.hourly_view_mode = match self.hourly_view_mode {
+                        HourlyViewMode::Table => HourlyViewMode::Profile,
+                        HourlyViewMode::Profile => HourlyViewMode::Table,
+                    };
+                    self.reset_selection();
+                }
             }
             KeyCode::Char('g') => {
                 self.open_group_by_picker();
@@ -483,6 +529,16 @@ impl App {
         self.selected_index = 0;
         self.selected_graph_cell = None;
         self.stats_breakdown_total_lines = 0;
+    }
+
+    /// Apply per-tab sort defaults when switching tabs.
+    /// Must be called AFTER updating `self.current_tab`, before `reset_selection`.
+    fn apply_tab_sort_defaults(&mut self) {
+        // Hourly tab shows time-ordered data by default; other tabs keep cost sort.
+        if self.current_tab == Tab::Hourly {
+            self.sort_field = SortField::Date;
+            self.sort_direction = SortDirection::Descending;
+        }
     }
 
     fn move_selection_up(&mut self) {
@@ -597,6 +653,7 @@ impl App {
             Tab::Overview | Tab::Models => self.data.models.len(),
             Tab::Agents => self.data.agents.len(),
             Tab::Daily => self.data.daily.len(),
+            Tab::Hourly => self.data.hourly.len(),
             Tab::Stats => {
                 if self.selected_graph_cell.is_some() {
                     self.stats_breakdown_total_lines
@@ -750,6 +807,17 @@ impl App {
                 .get_sorted_daily()
                 .get(self.selected_index)
                 .map(|d| format!("{}: {} tokens, ${:.4}", d.date, d.tokens.total(), d.cost)),
+            Tab::Hourly => self
+                .get_sorted_hourly()
+                .get(self.selected_index)
+                .map(|h| {
+                    format!(
+                        "{}: {} tokens, ${:.4}",
+                        h.datetime.format("%Y-%m-%d %H:%M"),
+                        h.tokens.total(),
+                        h.cost
+                    )
+                }),
             Tab::Stats => None,
         };
 
@@ -799,6 +867,8 @@ impl App {
                     "cacheWrite": d.tokens.cache_write,
                     "total": d.tokens.total()
                 },
+                "messageCount": d.message_count,
+                "turnCount": d.turn_count,
                 "cost": d.cost
             })).collect::<Vec<_>>(),
             "totals": {
@@ -940,6 +1010,43 @@ impl App {
         daily
     }
 
+    pub fn get_sorted_hourly(&self) -> Vec<&HourlyUsage> {
+        let mut hourly: Vec<&HourlyUsage> = self.data.hourly.iter().collect();
+
+        match (self.sort_field, self.sort_direction) {
+            (SortField::Cost, SortDirection::Descending) => hourly.sort_by(|a, b| {
+                b.cost
+                    .total_cmp(&a.cost)
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Cost, SortDirection::Ascending) => hourly.sort_by(|a, b| {
+                a.cost
+                    .total_cmp(&b.cost)
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Tokens, SortDirection::Descending) => hourly.sort_by(|a, b| {
+                b.tokens
+                    .total()
+                    .cmp(&a.tokens.total())
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Tokens, SortDirection::Ascending) => hourly.sort_by(|a, b| {
+                a.tokens
+                    .total()
+                    .cmp(&b.tokens.total())
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Date, SortDirection::Descending) => {
+                hourly.sort_by(|a, b| b.datetime.cmp(&a.datetime))
+            }
+            (SortField::Date, SortDirection::Ascending) => {
+                hourly.sort_by(|a, b| a.datetime.cmp(&b.datetime))
+            }
+        }
+
+        hourly
+    }
+
     pub fn is_narrow(&self) -> bool {
         self.terminal_width < 80
     }
@@ -957,19 +1064,21 @@ mod tests {
     #[test]
     fn test_tab_all() {
         let tabs = Tab::all();
-        assert_eq!(tabs.len(), 5);
+        assert_eq!(tabs.len(), 6);
         assert_eq!(tabs[0], Tab::Overview);
         assert_eq!(tabs[1], Tab::Models);
         assert_eq!(tabs[2], Tab::Daily);
-        assert_eq!(tabs[3], Tab::Stats);
-        assert_eq!(tabs[4], Tab::Agents);
+        assert_eq!(tabs[3], Tab::Hourly);
+        assert_eq!(tabs[4], Tab::Stats);
+        assert_eq!(tabs[5], Tab::Agents);
     }
 
     #[test]
     fn test_tab_next() {
         assert_eq!(Tab::Overview.next(), Tab::Models);
         assert_eq!(Tab::Models.next(), Tab::Daily);
-        assert_eq!(Tab::Daily.next(), Tab::Stats);
+        assert_eq!(Tab::Daily.next(), Tab::Hourly);
+        assert_eq!(Tab::Hourly.next(), Tab::Stats);
         assert_eq!(Tab::Stats.next(), Tab::Agents);
         assert_eq!(Tab::Agents.next(), Tab::Overview);
     }
@@ -979,7 +1088,8 @@ mod tests {
         assert_eq!(Tab::Overview.prev(), Tab::Agents);
         assert_eq!(Tab::Models.prev(), Tab::Overview);
         assert_eq!(Tab::Daily.prev(), Tab::Models);
-        assert_eq!(Tab::Stats.prev(), Tab::Daily);
+        assert_eq!(Tab::Hourly.prev(), Tab::Daily);
+        assert_eq!(Tab::Stats.prev(), Tab::Hourly);
         assert_eq!(Tab::Agents.prev(), Tab::Stats);
     }
 
@@ -1283,6 +1393,9 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Daily);
 
         app.handle_key_event(key(KeyCode::Tab));
+        assert_eq!(app.current_tab, Tab::Hourly);
+
+        app.handle_key_event(key(KeyCode::Tab));
         assert_eq!(app.current_tab, Tab::Stats);
 
         app.handle_key_event(key(KeyCode::Tab));
@@ -1302,6 +1415,9 @@ mod tests {
 
         app.handle_key_event(key(KeyCode::BackTab));
         assert_eq!(app.current_tab, Tab::Stats);
+
+        app.handle_key_event(key(KeyCode::BackTab));
+        assert_eq!(app.current_tab, Tab::Hourly);
 
         app.handle_key_event(key(KeyCode::BackTab));
         assert_eq!(app.current_tab, Tab::Daily);
@@ -1860,5 +1976,43 @@ mod tests {
 
         app.terminal_width = 60;
         assert!(!app.is_very_narrow());
+    }
+
+    // ── HourlyViewMode tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_hourly_view_mode_default() {
+        let mode = HourlyViewMode::default();
+        assert_eq!(mode, HourlyViewMode::Table);
+    }
+
+    #[test]
+    fn test_hourly_view_mode_toggle() {
+        let mut app = make_app();
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Table);
+
+        // Toggle to Profile when on Hourly tab
+        app.current_tab = Tab::Hourly;
+        app.handle_key_event(key(KeyCode::Char('v')));
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Profile);
+
+        // Toggle back to Table
+        app.handle_key_event(key(KeyCode::Char('v')));
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Table);
+    }
+
+    #[test]
+    fn test_hourly_view_mode_no_toggle_on_other_tabs() {
+        let mut app = make_app();
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Table);
+
+        // 'v' should not toggle when not on Hourly tab
+        app.current_tab = Tab::Overview;
+        app.handle_key_event(key(KeyCode::Char('v')));
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Table);
+
+        app.current_tab = Tab::Daily;
+        app.handle_key_event(key(KeyCode::Char('v')));
+        assert_eq!(app.hourly_view_mode, HourlyViewMode::Table);
     }
 }

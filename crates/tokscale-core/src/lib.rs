@@ -312,6 +312,29 @@ pub struct MonthlyReport {
     pub processing_time_ms: u32,
 }
 
+/// Hourly usage entry for a single hour slot (e.g. "2026-03-23 14:00")
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HourlyUsage {
+    pub hour: String,
+    pub clients: Vec<String>,
+    pub models: Vec<String>,
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub message_count: i32,
+    /// Number of user interaction turns (user→assistant boundaries).
+    pub turn_count: i32,
+    pub cost: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HourlyReport {
+    pub entries: Vec<HourlyUsage>,
+    pub total_cost: f64,
+    pub processing_time_ms: u32,
+}
+
 pub fn get_home_dir_string(home_dir_option: &Option<String>) -> Result<String, String> {
     home_dir_option
         .clone()
@@ -1255,6 +1278,109 @@ pub async fn get_monthly_report(options: ReportOptions) -> Result<MonthlyReport,
     })
 }
 
+#[derive(Default)]
+struct HourAggregator {
+    clients: HashSet<String>,
+    models: HashSet<String>,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cache_write: i64,
+    message_count: i32,
+    turn_count: i32,
+    cost: f64,
+}
+
+/// Generate hourly usage report, keyed by "YYYY-MM-DD HH:00".
+///
+/// Derives the hour slot from `UnifiedMessage.timestamp` (Unix ms).
+/// Falls back to date + "00:00" when timestamp is zero or missing.
+pub async fn get_hourly_report(options: ReportOptions) -> Result<HourlyReport, String> {
+    use chrono::{Local, TimeZone};
+
+    let start = Instant::now();
+
+    let home_dir = get_home_dir_string(&options.home_dir)?;
+
+    let clients: Vec<String> = options.clients.clone().unwrap_or_else(|| {
+        let mut clients: Vec<String> = ClientId::ALL
+            .iter()
+            .map(|c| c.as_str().to_string())
+            .collect();
+        clients.push("synthetic".to_string());
+        clients
+    });
+
+    let pricing = pricing::PricingService::get_or_init().await?;
+    let all_messages = parse_all_messages_with_pricing(&home_dir, &clients, Some(&pricing));
+
+    let filtered = filter_messages_for_report(all_messages, &options);
+
+    let mut hour_map: HashMap<String, HourAggregator> = HashMap::new();
+
+    for msg in filtered {
+        let hour_key = if msg.timestamp > 0 {
+            let ts_secs = msg.timestamp / 1000;
+            match Local.timestamp_opt(ts_secs, 0) {
+                chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:00").to_string(),
+                _ => format!("{} 00:00", msg.date),
+            }
+        } else {
+            format!("{} 00:00", msg.date)
+        };
+
+        let entry = hour_map.entry(hour_key).or_default();
+
+        entry.clients.insert(msg.client.clone());
+        entry
+            .models
+            .insert(normalize_model_for_grouping(&msg.model_id));
+        entry.input += msg.tokens.input;
+        entry.output += msg.tokens.output;
+        entry.cache_read += msg.tokens.cache_read;
+        entry.cache_write += msg.tokens.cache_write;
+        entry.message_count += msg.message_count.max(0);
+        if msg.is_turn_start {
+            entry.turn_count += 1;
+        }
+        entry.cost += msg.cost;
+    }
+
+    let mut entries: Vec<HourlyUsage> = hour_map
+        .into_iter()
+        .map(|(hour, agg)| HourlyUsage {
+            hour,
+            clients: {
+                let mut v: Vec<String> = agg.clients.into_iter().collect();
+                v.sort();
+                v
+            },
+            models: {
+                let mut v: Vec<String> = agg.models.into_iter().collect();
+                v.sort();
+                v
+            },
+            input: agg.input,
+            output: agg.output,
+            cache_read: agg.cache_read,
+            cache_write: agg.cache_write,
+            message_count: agg.message_count,
+            turn_count: agg.turn_count,
+            cost: agg.cost,
+        })
+        .collect();
+
+    entries.sort_by(|a, b| a.hour.cmp(&b.hour));
+
+    let total_cost: f64 = entries.iter().map(|e| e.cost).sum();
+
+    Ok(HourlyReport {
+        entries,
+        total_cost,
+        processing_time_ms: start.elapsed().as_millis() as u32,
+    })
+}
+
 async fn generate_graph_with_loaded_pricing(
     options: ReportOptions,
     pricing: Option<&pricing::PricingService>,
@@ -1859,6 +1985,7 @@ pub fn parsed_to_unified(msg: &ParsedMessage, cost: f64) -> UnifiedMessage {
         message_count: msg.message_count,
         agent: msg.agent.clone(),
         dedup_key: None,
+        is_turn_start: false,
     }
 }
 

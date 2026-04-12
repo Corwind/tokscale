@@ -2,6 +2,8 @@ mod agents;
 mod bar_chart;
 mod daily;
 pub mod dialog;
+mod hourly;
+mod hourly_profile;
 mod footer;
 mod header;
 mod models;
@@ -45,6 +47,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Tab::Models => models::render(frame, app, chunks[1]),
             Tab::Agents => agents::render(frame, app, chunks[1]),
             Tab::Daily => daily::render(frame, app, chunks[1]),
+            Tab::Hourly => hourly::render(frame, app, chunks[1]),
             Tab::Stats => stats::render(frame, app, chunks[1]),
         }
     }
